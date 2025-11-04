@@ -1,0 +1,36 @@
+{
+  "name": "tenantname-reduce-and-save-deliverable",
+  "description": "Saves deliverable into the context",
+  "subPipelineDefinition": {},
+  "pipeline": [
+    "Set Up Parameter",
+    "Reducer",
+    "Putting Deliverable into the Context"
+  ],
+  "segments": {
+    "Set Up Parameter": {
+      "class": "JavaScriptTransform",
+      "config": {
+        "pushUndefined": true,
+        "stopOnError": false,
+        "draft": false,
+        "code": "function transform (message, context) {\n  const { payload } = message;\n  \n  if (!context.deliverableName) {\n    \n    context.deliverableName = \"deliverable\";\n    \n  }\n\n \n return message;\n}\n"
+      }
+    },
+    "Reducer": {
+      "class": "reducer",
+      "config": {
+        "accumulator": "tempDeliverable"
+      }
+    },
+    "Putting Deliverable into the Context": {
+      "class": "JavaScriptTransform",
+      "config": {
+        "pushUndefined": true,
+        "stopOnError": false,
+        "draft": false,
+        "code": "function transform (message, context) {\n const { payload } = message;\n const deliverableName = context.deliverableName;\n \n const { tempDeliverable } = message;\n const deliverableFile = tempDeliverable;\n \n context[deliverableName] = deliverableFile;\n \n \n \n return {\n    ...message,\n    payload: {\n      ...payload\n    }\n  };\n \n}"
+      }
+    }
+  }
+}

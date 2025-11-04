@@ -1,0 +1,33 @@
+{
+  "name": "tenantname-restore-deliverable-and-for-each",
+  "description": "Pull deliverable out of context and onto payload and split it into multiple messages",
+  "subPipelineDefinition": {},
+  "pipeline": [
+    "Set Up Parameter",
+    "Pull Payload Back out of Context",
+    "Split Message into Multiple Messages"
+  ],
+  "segments": {
+    "Set Up Parameter": {
+      "class": "JavaScriptTransform",
+      "config": {
+        "pushUndefined": true,
+        "stopOnError": false,
+        "draft": false,
+        "code": "function transform (message, context) {\n  const { payload } = message;\n  \n  if (!context.deliverableName) {\n    context.deliverableName = \"deliverable\";\n  }\n\n \n return {\n    ...message,\n    payload: {\n      ...payload\n      \n    }\n  };\n}\n"
+      }
+    },
+    "Pull Payload Back out of Context": {
+      "class": "JavaScriptTransform",
+      "config": {
+        "pushUndefined": true,
+        "stopOnError": false,
+        "draft": false,
+        "code": "function transform (message, context) {\n  const { payload } = message;\n  \n  const deliverableName = context.deliverableName;\n  \n  const deliverableFile = context[deliverableName];\n\n \n return {\n    ...message,\n    payload: deliverableFile\n  };\n}\n"
+      }
+    },
+    "Split Message into Multiple Messages": {
+      "class": "forEach"
+    }
+  }
+}
