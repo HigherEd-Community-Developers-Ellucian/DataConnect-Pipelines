@@ -1,0 +1,86 @@
+{
+  "name": "schoolname-get-person-by-id",
+  "description": "Users ID or PIDM to retrieve person",
+  "parameters": [
+    {
+      "name": "ethosApiKey",
+      "type": "string",
+      "sensitive": true
+    },
+    {
+      "name": "pidm",
+      "type": "string",
+      "maxLength": 8
+    }
+  ],
+  "apiDefinition": {
+    "authType": "userToken",
+    "httpVerb": "GET"
+  },
+  "pipeline": [
+    "Handle ID/PIDM",
+    "persons",
+    "Copy persons.id to bannerGuid",
+    "identification-additional-identification",
+    "user-identity-profiles"
+  ],
+  "segments": {
+    "Handle ID/PIDM": {
+      "class": "JavaScriptTransform",
+      "description": "Converts PIDM or ID to both PIDM and ID",
+      "config": {
+        "pushUndefined": true,
+        "stopOnError": false,
+        "code": "function transform (message, context) {\n  const contextPidm = context.get('pidm');\n  const bannerPidm = parseInt(contextPidm); // take the input and make it a number (in case we got an id)\n  // Format the following based on your schools rules if the ID and PIDM have a relationship that can be converted between\n  const bannerId = String(bannerPidm).padStart(8,'0');  // take the pidm and convert it to an 8 character id with leading 0s\n  //const bannerId = String(String(bannerPidm).padStart(8,'0')).padStart(9, 'A');  // take the pidm and convert it to an 9 character id with leading A0s\n\n  return { payload:\n    {\n      bannerPidm,\n      bannerId\n    }\n  }\n}\n"
+      }
+    },
+    "persons": {
+      "class": "ethosProxyGetFilter",
+      "config": {
+        "resource": "persons",
+        "filter": "?criteria={\"credentials\":[{\"type\":\"bannerId\",\"value\":\"{{bannerId}}\" }]}",
+        "payloadTargetPath": "persons",
+        "acceptVersions": ["12"],
+        "cache": false,
+        "queryByPost": false,
+        "ignoreErrors": false,
+        "errorPath": "personError"
+      }
+    },
+    "Copy persons.id to bannerGuid": {
+      "class": "JavaScriptTransform",
+      "description": "Gets data from Persons and moves it one level down in the output to make it easier to destructure later",
+      "config": {
+        "pushUndefined": true,
+        "stopOnError": false,
+        "draft": false,
+        "code": "function transform (message, context) {\n  \n  //Copy forward all of our message content\n  const contextBannerId = message.payload.bannerId;\n  const bannerId = contextBannerId;\n  const contextPidm = message.payload.bannerPidm;\n  const bannerPidm = contextPidm;\n  const contextPersons = message.payload.persons;\n  const persons = contextPersons[0]; //only getting one person, so move it down a level in the heirarchy\n  \n  const bannerGuid = persons.id;\n  \n  return { payload:\n    {\n      bannerPidm,\n      bannerId,\n      bannerGuid,\n      persons\n    }\n  }\n}\n"
+      }
+    },
+    "identification-additional-identification": {
+      "class": "ethosProxyGetFilter",
+      "description": "Add in Additional IDs",
+      "config": {
+        "resource": "identification-additional-identification",
+        "filter": "?id={{bannerId}}",
+        "payloadTargetPath": "goradid",
+        "acceptVersions": ["2"],
+        "cache": false,
+        "queryByPost": false,
+        "ignoreErrors": false
+      }
+    },
+    "user-identity-profiles": {
+      "class": "ethosProxyGet",
+      "description": "Add in Banner ERP Roles",
+      "config": {
+        "resource": "user-identity-profiles",
+        "acceptVersions": ["1"],
+        "idFromPayload": "bannerGuid",
+        "target": "gorirol",
+        "cache": false,
+        "ignoreErrors": false
+      }
+    }
+  }
+}
