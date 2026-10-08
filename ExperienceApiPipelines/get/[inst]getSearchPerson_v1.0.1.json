@@ -1,0 +1,80 @@
+{
+  "name": "[inst]getSearchPerson",
+  "description": "Pass the Banner ID, name, username or personal email to get the person record back.  guid, bid, name, username",
+  "parameters": [
+    {
+      "name": "ethosApiKey",
+      "type": "string",
+      "required": true,
+      "sensitive": true
+    },
+    {
+      "name": "bannerId",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "firstName",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "lastName",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "username",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "personalEmail",
+      "type": "string",
+      "required": false
+    }
+  ],
+  "apiDefinition": {
+    "authType": "userToken",
+    "httpVerb": "GET"
+  },
+  "pipeline": [
+    "Resolve search criteria",
+    "Get persons by criteria",
+    "Normalize persons"
+  ],
+  "segments": {
+    "Resolve search criteria": {
+      "class": "JavaScriptTransform",
+      "config": {
+        "pushUndefined": true,
+        "stopOnError": false,
+        "draft": false,
+        "code": "function transform (message, context) {\n  const payload = message.payload || {};\n\n  const trim = (value) => {\n    if (value === null || typeof value === 'undefined') {\n      return '';\n    }\n\n    return `${value}`.trim();\n  };\n\n  const input = {\n    bannerId: trim(context.get('bannerId') || payload.bannerId),\n    username: trim(context.get('username') || payload.username),\n    personalEmail: trim(context.get('personalEmail') || payload.personalEmail),\n    firstName: trim(context.get('firstName') || payload.firstName),\n    lastName: trim(context.get('lastName') || payload.lastName)\n  };\n\n  let searchMode = '';\n  let criteriaObject = null;\n\n  if (input.bannerId) {\n    searchMode = 'bannerId';\n    criteriaObject = {\n      credentials: [\n        {\n          type: 'bannerId',\n          value: input.bannerId\n        }\n      ]\n    };\n  } else if (input.username) {\n    searchMode = 'username';\n    criteriaObject = {\n      credentials: [\n        {\n          type: 'bannerUserName',\n          value: input.username\n        }\n      ]\n    };\n  } else if (input.personalEmail) {\n    searchMode = 'personalEmail';\n    criteriaObject = {\n      emails: [\n        {\n          address: input.personalEmail\n        }\n      ]\n    };\n  } else if (input.firstName || input.lastName) {\n    searchMode = 'name';\n    const nameCriteria = {};\n\n    if (input.firstName) {\n      nameCriteria.firstName = input.firstName;\n    }\n    if (input.lastName) {\n      nameCriteria.lastName = input.lastName;\n    }\n\n    criteriaObject = {\n      names: [nameCriteria]\n    };\n  }\n\n  if (!criteriaObject) {\n    throw new Error('One search criterion is required: bannerId, username, personalEmail, or first/last name.');\n  }\n\n  return {\n    payload: {\n      ...payload,\n      searchMode,\n      criteriaObject,\n      criteriaEncoded: encodeURIComponent(JSON.stringify(criteriaObject))\n    }\n  };\n}\n"
+      }
+    },
+    "Get persons by criteria": {
+      "class": "ethosProxyGetFilter",
+      "config": {
+        "resource": "persons",
+        "filter": "?criteria={{criteriaEncoded}}",
+        "payloadTargetPath": "person",
+        "acceptVersions": [
+          "12"
+        ],
+        "cache": false,
+        "queryByPost": false,
+        "ignoreErrors": false
+      }
+    },
+    "Normalize persons": {
+      "class": "JavaScriptTransform",
+      "config": {
+        "pushUndefined": true,
+        "stopOnError": false,
+        "draft": false,
+        "code": "function transform(message) {\n  const payload = message.payload;\n  const payloadArray = Array.isArray(payload) ? payload : null;\n  const payloadObject =\n    (!payloadArray && payload && typeof payload === 'object') ? payload : {};\n\n  const sourceRows = Array.isArray(payloadObject.person)\n    ? payloadObject.person\n    : Array.isArray(payloadObject.persons)\n      ? payloadObject.persons\n      : (payloadArray || []);\n\n  const rows = sourceRows.flatMap((row) =>\n    Array.isArray(row?.person) ? row.person : [row]\n  );\n\n  const normalize = (person) => {\n    const credentials = Array.isArray(person?.credentials) ? person.credentials : [];\n    const names = Array.isArray(person?.names) ? person.names : [];\n    const emails = Array.isArray(person?.emails) ? person.emails : [];\n\n    const byCredential = (type) => {\n      const match = credentials.find((entry) =>\n        `${entry?.type || ''}`.toLowerCase() === `${type}`.toLowerCase()\n      );\n      return match?.value || '';\n    };\n\n    const preferredName =\n      names.find((entry) =>\n        `${entry?.type?.category || ''}`.toLowerCase() === 'favored'\n      ) ||\n      names.find((entry) =>\n        `${entry?.preference || ''}`.toLowerCase() === 'preferred'\n      ) ||\n      names[0] ||\n      {};\n\n    const preferredEmail = emails.find((entry) =>\n      `${entry?.preference || ''}`.toLowerCase() === 'primary'\n    ) || emails[0] || {};\n\n    const firstName = preferredName.firstName || person?.firstName || '';\n    const lastName = preferredName.lastName || person?.lastName || '';\n    const bannerId = byCredential('bannerId');\n    const username = byCredential('bannerUserName');\n\n    return {\n      id: person?.id || '',\n      studentId: bannerId || person?.id || '',\n      bannerId,\n      username,\n      firstName,\n      lastName,\n      displayName: `${firstName} ${lastName}`.trim() || person?.id || 'Unknown',\n      email: preferredEmail.address || person?.email || person?.emailAddress || ''\n    };\n  };\n\n  return {\n    payload: rows\n      .filter((row) => row && row.id)\n      .map(normalize)\n  };\n}"
+      }
+    }
+  }
+}
