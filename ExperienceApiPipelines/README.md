@@ -62,6 +62,9 @@ export default MyExtension;
 - schoolname-get-person-by-id
   - Banner Only
   - Retrieves person related data for a given PIDM or ID
+- schoolname-get-terms
+  - Banner Only
+  - Gets Term data from term-codes (STVTERM) for given date ranges
 
 ## post
 
