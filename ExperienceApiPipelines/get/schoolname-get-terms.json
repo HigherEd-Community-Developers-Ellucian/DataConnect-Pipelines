@@ -1,0 +1,75 @@
+{
+  "name": "schoolname-get-terms",
+  "description": "Gets the terms for given Start/End date ranges in YYYY-MM-DD format. \n\nIf no dates are provided, uses one year before today and after today",
+  "parameters": [
+    {
+      "name": "ethosApiKey",
+      "type": "string",
+      "required": true,
+      "sensitive": true
+    },
+    {
+      "name": "startsOnOrBeforeDate",
+      "label": "Starts On or Before Date",
+      "description": "The Date which the term(s) will start on or before. Often this today through a future date.\n\nWill default to 365 days in the future.",
+      "type": "string",
+      "regex": {
+        "expression": "\\d{4}-\\d{2}-\\d{2}"
+      }
+    },
+    {
+      "name": "endsOnOrAfterDate",
+      "label": "Ends On or After Date",
+      "description": "The Date which the term(s) will end on or after. Often this a past date through today. \n\nWill default to 365 days ago.",
+      "type": "string",
+      "regex": {
+        "expression": "\\d{4}-\\d{2}-\\d{2}"
+      }
+    },
+    {
+      "name": "calculationDate",
+      "label": "Term Calculation Date",
+      "description": "The date all the buckets of Terms will calculate as \"Today\". This is used to determine is in the past, current, and future.\n\nWill default to Today.",
+      "type": "string",
+      "regex": {
+        "expression": "\\d{4}-\\d{2}-\\d{2}"
+      }
+    }
+  ],
+  "apiDefinition": {
+    "authType": "userToken",
+    "httpVerb": "GET"
+  },
+  "pipeline": ["Set Dates", "Get term-codes", "Create Groupings"],
+  "segments": {
+    "Set Dates": {
+      "class": "JavaScriptTransform",
+      "config": {
+        "pushUndefined": true,
+        "stopOnError": false,
+        "code": "function transform (message, context) {\n  // -------------------------------------------------------------\n  // DATE FUNCTIONS FOR PIPELINES\n  \n  // Returns a JavaScript date as of a given offset\n  // Use negative numbers to get past dates\n  const getOffsetDate = (offset) => {\n    const newDate = new Date();\n    // Calc the Offset\n    newDate.setDate(newDate.getDate() + offset);\n    return newDate;\n  };\n  \n  // Formats a JavaScript Date in YYYY-MM-DD format\n  // Ethos APIs typically return dates in this format\n  const formatDateAsAPI = (date) => {\n    return date.toISOString().split('T')[0];\n  };\n  \n  // Returns an Oracle DB formatted Date\n  // This converts a date formatted 'YYYY-MM-DD' (or a JS Date) to Oracle Date 'DD-MON-YYYY'\n  const formatDateAsOracle = (date) => {\n    const myDate = typeof date === 'string' ? date : formatDateAsAPI(date);\n    const months = ['SKIP', 'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];\n    const [y, m, d] = myDate.split('-');\n    return [d, months[parseInt(m)], y].join('-');\n  };\n  // -------------------------------------------------------------\n\n  // get Params\n  const { startsOnOrBeforeDate , endsOnOrAfterDate , calculationDate } = context;\n  \n  // Default Value if parameters not provided\n  const today = formatDateAsAPI( new Date() );\n  const nextYear = formatDateAsAPI( getOffsetDate( 365 ) );\n  const lastYear = formatDateAsAPI( getOffsetDate( -365 ) );\n\n  message.payload.startsOnOrBeforeDate = startsOnOrBeforeDate || nextYear;  // Used to get terms from term-codes\n  message.payload.endsOnOrAfterDate = endsOnOrAfterDate || lastYear;        // Used to get terms from term-codes\n  message.payload.calculationDate = calculationDate || today;               // Used to calculate future terms in final transform \n  \n  return message;\n}\n"
+      }
+    },
+    "Get term-codes": {
+      "class": "ethosProxyGetFilter",
+      "config": {
+        "resource": "term-codes",
+        "filter": "?criteria={\"startDate\":{\"$lte\":\"{{message.payload.startsOnOrBeforeDate}}\"},\"endDate\":{\"$gte\":\"{{message.payload.endsOnOrAfterDate}}\"}}",
+        "payloadTargetPath": "terms",
+        "acceptVersions": ["1"],
+        "cache": true,
+        "queryByPost": false,
+        "ignoreErrors": true,
+        "errorPath": "termErrors"
+      }
+    },
+    "Create Groupings": {
+      "class": "JavaScriptTransform",
+      "config": {
+        "pushUndefined": true,
+        "stopOnError": false,
+        "code": "function transform (message, context) {\n  // -------------------------------------------------------------\n  // Converts a full JS date string to just the YYYY-MM-DD format\n  \n  const dateOnly = ( dateTime ) => {\n    return dateTime?.substring( 0 , 10 );\n  }\n  \n  // -------------------------------------------------------------\n  \n  const calculationDate = message.payload.calculationDate;\n  const semesterTermType = 'S';\n  \n  // By default terms are sorted by start date desc and end date desc, so we don't need to do futher sorting.\n  \n  // Get API response filtered by Term Type\n  const terms = message.payload?.terms?.filter( (term) => term?.trmtCode ) || [];\n  message.payload.terms = terms;\n  \n  // Create the different groupings of terms\n  message.payload.currentTerms = terms.filter( ( term ) => dateOnly(term?.startDate) <= calculationDate && dateOnly( term?.endDate ) >= calculationDate );\n  message.payload.futureTerms = terms.filter( ( term ) => dateOnly( term?.startDate )> calculationDate );\n  message.payload.pastTerms = terms.filter( ( term ) => dateOnly( term?.endDate ) < calculationDate );\n  message.payload.currentSemesters = message.payload.currentTerms.filter( ( term ) => term?.trmtCode === 'S' );\n  message.payload.futureSemesters = message.payload.futureTerms.filter( ( term ) => term?.trmtCode === 'S' );\n  message.payload.pastSemesters = message.payload.pastTerms.filter( ( term ) => term?.trmtCode === 'S' );\n  \n  // Calculate individual terms\n  message.payload.currentTerm = message.payload.currentTerms?.[0];\n  message.payload.currentSemester = message.payload.currentSemesters?.[0];\n  message.payload.nextTerm = message.payload.futureTerms?.[ message.payload.futureTerms?.length - 1 ]; // Since the are by desc, grab the last to be equivalent to asc\n  message.payload.lastTerm = message.payload.pastTerms?.[0];\n  message.payload.nextSemester = message.payload.futureSemesters?.[ message.payload.futureSemesters?.length - 1]; // Since the are by desc, grab the last to be equivalent to asc\n  message.payload.lastSemester = message.payload.pastSemesters?.[0];\n  \n  return message;\n}\n"
+      }
+    }
+  }
+}
